@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <title>Durak Test Client</title>
+    <style>
+        body { font-family: monospace; background: #1a1a1a; color: #fff; padding: 20px; }
+        .card { background: #2a2a2a; border-radius: 8px; padding: 20px; max-width: 400px; margin-bottom: 20px; }
+        input, button { display: block; width: 100%; margin: 10px 0; padding: 10px; box-sizing: border-box; }
+        button { background: #007acc; color: #fff; border: none; cursor: pointer; }
+        button:hover { background: #005f9e; }
+        #log { background: #000; padding: 10px; height: 180px; overflow-y: scroll; border: 1px solid #444; }
+        .hidden { display: none; }
+    </style>
+</head>
+<body>
+    <h1>Durak MVP: Тестовый стенд сети</h1>
+
+    <!-- Экран авторизации -->
+    <div id="auth-screen" class="card">
+        <h3>Авторизация</h3>
+        <input type="text" id="username" value="player1" placeholder="Логин">
+        <input type="password" id="password" value="123" placeholder="Пароль">
+        <button id="btn-login">Войти</button>
+        <div id="auth-error" style="color: #ff5555;"></div>
+    </div>
+
+    <!-- Экран управления ходом -->
+    <div id="game-screen" class="card hidden">
+        <h3>Игровая комната</h3>
+        <p>Вы вошли как: <strong id="current-user"></strong></p>
+        <button id="btn-move" style="background: #28a745;">Сделать ход</button>
+    </div>
+
+    <!-- Системный лог -->
+    <div class="card" style="max-width: 600px;">
+        <h3>Сетевой лог (подтверждения сервера):</h3>
+        <div id="log"></div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
