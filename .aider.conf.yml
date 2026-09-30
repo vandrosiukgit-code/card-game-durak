@@ -3,7 +3,7 @@
 
 # Основные настройки поведения
 suggest-shell-commands: true
-shell-command-confirm: true
+#shell-command-confirm: true
 auto-test: true
 auto-lint: true
 
