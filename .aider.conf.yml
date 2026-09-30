@@ -4,7 +4,7 @@
 # Основные настройки поведения
 suggest-shell-commands: true
 shell-command-confirm: true
-auto-test: false
+auto-test: true
 
 # Режим архитектора (обсуждение перед правками)
 architect: true
