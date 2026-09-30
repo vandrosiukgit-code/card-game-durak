@@ -1,0 +1,18 @@
+# Основные настройки поведения
+suggest-shell-commands: true
+auto-test: false
+
+# Режим архитектора (обсуждение перед правками)
+architect: true
+
+# Автоматическое согласие на интерактивные запросы (добавление файлов и т.д.)
+yes-always: true
+
+# Язык общения
+chat-language: russian# Конфигурация Aider для проекта card-game-durak.
+# Автоматически подгружает правила проекта в каждую сессию.
+
+read:
+  - CONVENTIONS.md
+  - VISION.md
+  - PODKIDNOY_DURAK_RULES.md
