@@ -3,11 +3,66 @@
 Разовый инструмент для Langflow (Custom Component).
 Не является частью основного проекта.
 
-Генерирует standalone SVG для карт рангов 2–10 во всех мастях.
+Область применения
+------------------
+
+Скрипт генерирует SVG-карты **числовых рангов 2–10** во всех четырёх
+мастях. Фигурные карты (J, Q, K, A) в текущей версии **не поддерживаются**
+и будут добавлены отдельной задачей.
+
+Раскладка пипсов (русская колода)
+---------------------------------
+
+Русская игральная колода — 36 карт: ранги 6–10, J, Q, K, A в четырёх
+мастях (♥ ♦ ♣ ♠). Раскладка пипсов (символов масти) в русской колоде
+совпадает со стандартной французской колодой и подчиняется правилу
+**симметрии относительно центра карты**.
+
+Пипсы располагаются в области ``pip_area`` — прямоугольнике с отступами
+``pip_margin_x`` / ``pip_margin_y`` от краёв карты. Координаты задаются
+в **нормированных долях** (0.0 — верх/лево, 1.0 — низ/право) и умножаются
+на ширину/высоту области.
+
+Стандартные раскладки для 2–10:
+
+* **2** — две точки по вертикали (верх, низ).
+* **3** — три точки по вертикали (верх, центр, низ).
+* **4** — четыре точки по углам (2×2).
+* **5** — четыре по углам + одна в центре.
+* **6** — две колонки по три точки (2×3).
+* **7** — шесть как у «6» + одна в центре между верхней парой.
+* **8** — шесть как у «6» + две в центре (между верхней и нижней парами).
+* **9** — две колонки по четыре точки (2×4) + одна в центре.
+* **10** — две колонки по четыре точки (2×4) + две в центре (верх/низ).
+
+Пипсы в нижней половине карты (``fy > 0.5``) **зеркалятся** поворотом
+на 180° — это классический приём, чтобы символы масти «смотрели» вниз
+и карта читалась одинаково с любой стороны.
+
+Угловой индекс (якорь дизайна)
+------------------------------
+
+Угловой индекс — это **ранг + мелкая масть** в верхнем-левом и
+(повёрнутый на 180°) в нижнем-правом углу карты. Его положение и размер
+**фиксированы** для всех карт и не зависят от номинала. Это «якорь»
+дизайна: при смене номинала меняется только внутренняя раскладка пипсов,
+углы остаются на месте.
+
+Параметры якоря задаются в ``CardStyle``:
+
+* ``corner_padding_x`` / ``corner_padding_y`` — отступы от края карты;
+* ``corner_rank_size`` — размер цифры ранга;
+* ``corner_suit_size`` — размер мелкой масти под цифрой.
+
+⚠️ **Не менять эти параметры без пересчёта коллизий** — есть тест
+``test_corner_index_does_not_overlap_pip_area``, который проверяет, что
+угловой индекс не пересекается с областью пипсов.
 """
 
 from __future__ import annotations
 
+import argparse
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -191,6 +246,7 @@ SUIT_COLORS: dict[str, str] = {
 # ---------------------------------------------------------------------------
 
 PIP_LAYOUTS: dict[int, list[tuple[float, float]]] = {
+    1: [(0.5, 0.5)],
     2: [(0.5, 0.0), (0.5, 1.0)],
     3: [(0.5, 0.0), (0.5, 0.5), (0.5, 1.0)],
     4: [(0.0, 0.0), (1.0, 0.0), (0.0, 1.0), (1.0, 1.0)],
@@ -251,7 +307,15 @@ PIP_LAYOUTS: dict[int, list[tuple[float, float]]] = {
         (0.0, 1.0),
         (1.0, 1.0),
     ],
+    # Фигурные карты: упрощённые раскладки (без портретов).
+    11: [(0.5, 0.0), (0.5, 1.0)],  # J — как «2»
+    12: [(0.5, 0.0), (0.5, 0.5), (0.5, 1.0)],  # Q — как «3»
+    13: [(0.0, 0.0), (1.0, 0.0), (0.0, 1.0), (1.0, 1.0)],  # K — как «4»
+    14: [(0.5, 0.5)],  # A — один крупный пипс в центре
 }
+
+# Ранги, у которых пипсы рисуются крупнее (туз — один большой символ).
+LARGE_PIP_RANKS: frozenset[int] = frozenset({14})
 
 
 # ---------------------------------------------------------------------------
@@ -383,28 +447,57 @@ def _corner_index(
     return f'<g transform="rotate(180 {cx} {cy})">{inner}</g>'
 
 
+# Соответствие числового ранга буквенному обозначению для углового индекса.
+RANK_LABELS: dict[int, str] = {
+    2: "2",
+    3: "3",
+    4: "4",
+    5: "5",
+    6: "6",
+    7: "7",
+    8: "8",
+    9: "9",
+    10: "10",
+    11: "J",
+    12: "Q",
+    13: "K",
+    14: "A",
+}
+
+
 def generate_card(rank: int, suit: str, style: CardStyle | None = None) -> str:
-    """Генерирует standalone SVG-код карты."""
+    """Генерирует standalone SVG-код карты.
+
+    :param rank: числовой ранг карты (2–10, 11=J, 12=Q, 13=K, 14=A)
+    :param suit: масть (``hearts``, ``diamonds``, ``clubs``, ``spades``)
+    :param style: параметры стиля; если ``None`` — используется ``CardStyle()``
+    :return: строка с SVG-кодом карты
+    :raises ValueError: если масть или ранг неизвестны
+    """
     if style is None:
         style = CardStyle()
     if suit not in SUIT_PATHS:
         raise ValueError(f"Неизвестная масть: {suit}")
-    if not 2 <= rank <= 10:
-        raise ValueError(f"Ранг должен быть 2–10, получено: {rank}")
+    if rank not in RANK_LABELS:
+        raise ValueError(
+            f"Ранг должен быть 2–14 (J=11, Q=12, K=13, A=14), получено: {rank}"
+        )
 
     color = _suit_color(suit, style)
-    rank_label = str(rank)
+    rank_label = RANK_LABELS[rank]
 
     area_x = style.pip_margin_x
     area_y = style.pip_margin_y
     area_w = style.width - 2 * area_x
     area_h = style.height - 2 * area_y
 
+    pip_size = style.pip_size * 2 if rank in LARGE_PIP_RANKS else style.pip_size
+
     pips: list[str] = []
     for fx, fy in get_pip_layout(rank, suit):
         px = area_x + fx * area_w
         py = area_y + fy * area_h
-        symbol = _suit_symbol(suit, px, py, style.pip_size, color)
+        symbol = _suit_symbol(suit, px, py, pip_size, color)
         if style.mirror_pips and fy > 0.5:
             symbol = f'<g transform="rotate(180 {px:.2f} {py:.2f})">{symbol}</g>'
         pips.append(symbol)
@@ -426,14 +519,200 @@ def _card_filename(rank: int, suit: str) -> str:
     """Возвращает имя файла карты, удобное для использования в коде.
 
     Формат: ``<rank>_of_<suit>.svg``, например ``10_of_spades.svg``.
+    Для фигурных карт используется буквенное обозначение:
+    ``J_of_spades.svg``, ``Q_of_hearts.svg``, ``K_of_clubs.svg``,
+    ``A_of_diamonds.svg``.
     """
-    return f"{rank}_of_{suit}.svg"
+    return f"{RANK_LABELS[rank]}_of_{suit}.svg"
+
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+
+# Алиасы мастей: латиница, символы, русские названия.
+SUIT_ALIASES: dict[str, str] = {
+    "hearts": "hearts",
+    "h": "hearts",
+    "♥": "hearts",
+    "черви": "hearts",
+    "diamonds": "diamonds",
+    "d": "diamonds",
+    "♦": "diamonds",
+    "бубны": "diamonds",
+    "clubs": "clubs",
+    "c": "clubs",
+    "♣": "clubs",
+    "трефы": "clubs",
+    "spades": "spades",
+    "s": "spades",
+    "♠": "spades",
+    "пики": "spades",
+}
+
+# Алиасы рангов: цифры и буквы фигурных карт.
+RANK_ALIASES: dict[str, int] = {
+    "2": 2,
+    "3": 3,
+    "4": 4,
+    "5": 5,
+    "6": 6,
+    "7": 7,
+    "8": 8,
+    "9": 9,
+    "10": 10,
+    "j": 11,
+    "jack": 11,
+    "валет": 11,
+    "q": 12,
+    "queen": 12,
+    "дама": 12,
+    "k": 13,
+    "king": 13,
+    "король": 13,
+    "a": 14,
+    "ace": 14,
+    "туз": 14,
+}
+
+
+def _parse_rank(value: str) -> int:
+    """Преобразует строку ранга в число (2–14)."""
+    key = value.strip().lower()
+    if key not in RANK_ALIASES:
+        raise argparse.ArgumentTypeError(
+            f"Неизвестный ранг: {value!r}. "
+            f"Допустимо: 2–10, J, Q, K, A (или jack/queen/king/ace)."
+        )
+    return RANK_ALIASES[key]
+
+
+def _parse_suit(value: str) -> str:
+    """Преобразует строку масти в каноническое имя (hearts/diamonds/clubs/spades)."""
+    key = value.strip().lower()
+    if key not in SUIT_ALIASES:
+        raise argparse.ArgumentTypeError(
+            f"Неизвестная масть: {value!r}. "
+            f"Допустимо: hearts, diamonds, clubs, spades (или ♥ ♦ ♣ ♠, h/d/c/s)."
+        )
+    return SUIT_ALIASES[key]
+
+
+def _parse_rank_range(value: str) -> list[int]:
+    """Преобразует строку диапазона рангов в список чисел.
+
+    Формат: ``START-END`` (например, ``2-10``). Оба конца включительно.
+
+    :param value: строка диапазона
+    :return: список рангов по возрастанию
+    :raises argparse.ArgumentTypeError: если формат неверен или start > end
+    """
+    parts = value.strip().split("-")
+    if len(parts) != 2:
+        raise argparse.ArgumentTypeError(
+            f"Диапазон должен быть в формате START-END, получено: {value!r}"
+        )
+    start = _parse_rank(parts[0])
+    end = _parse_rank(parts[1])
+    if start > end:
+        raise argparse.ArgumentTypeError(
+            f"Начало диапазона больше конца: {start} > {end}"
+        )
+    return list(range(start, end + 1))
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    """Собирает парсер аргументов командной строки."""
+    parser = argparse.ArgumentParser(
+        prog="deck_design_system",
+        description=(
+            "Генератор SVG-карт для «Подкидного Дурака». "
+            "Создаёт одну карту или пакет карт в assets/card_deck/cards/."
+        ),
+        epilog=(
+            "Примеры:\n"
+            "  python -m tools.deck_design_system 9 --suit spades\n"
+            "  python -m tools.deck_design_system 10 --suit ♥\n"
+            "  python -m tools.deck_design_system --rank-range 2-10 --all-suits\n"
+            "  python -m tools.deck_design_system --rank-range 2-10 --suit spades\n"
+            "  python -m tools.deck_design_system J --suit clubs -o ./out\n"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument(
+        "rank",
+        nargs="?",
+        type=_parse_rank,
+        default=None,
+        help="Ранг карты: 2–10, J, Q, K, A (или jack/queen/king/ace).",
+    )
+    parser.add_argument(
+        "--suit",
+        type=_parse_suit,
+        default=None,
+        metavar="SUIT",
+        help="Масть: hearts, diamonds, clubs, spades (или ♥ ♦ ♣ ♠, h/d/c/s).",
+    )
+    parser.add_argument(
+        "--rank-range",
+        type=_parse_rank_range,
+        default=None,
+        metavar="START-END",
+        help="Диапазон рангов для пакетной генерации (например, 2-10).",
+    )
+    parser.add_argument(
+        "--all-suits",
+        action="store_true",
+        help="Генерировать все четыре масти (только с --rank-range).",
+    )
+    parser.add_argument(
+        "-o",
+        "--output-dir",
+        type=Path,
+        default=OUTPUT_DIR,
+        help=f"Каталог для сохранения SVG (по умолчанию: {OUTPUT_DIR}).",
+    )
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Точка входа CLI. Возвращает код выхода (0 — успех)."""
+    parser = _build_parser()
+    args = parser.parse_args(argv)
+
+    # Пакетный режим: --rank-range задан.
+    if args.rank_range is not None:
+        if args.rank is not None:
+            parser.error("Нельзя указывать позиционный rank вместе с --rank-range")
+        if args.all_suits:
+            suits = list(SUIT_PATHS.keys())
+        elif args.suit is not None:
+            suits = [args.suit]
+        else:
+            parser.error("С --rank-range укажи --suit или --all-suits")
+
+        args.output_dir.mkdir(parents=True, exist_ok=True)
+        count = 0
+        for rank in args.rank_range:
+            for suit in suits:
+                svg = generate_card(rank=rank, suit=suit)
+                out = args.output_dir / _card_filename(rank, suit)
+                out.write_text(svg, encoding="utf-8")
+                count += 1
+        print(f"Готово: {count} карт(ы) в {args.output_dir.resolve()}")
+        return 0
+
+    # Одиночный режим: нужны rank и --suit.
+    if args.rank is None or args.suit is None:
+        parser.error("Укажи rank и --suit, либо используй --rank-range")
+
+    args.output_dir.mkdir(parents=True, exist_ok=True)
+    svg = generate_card(rank=args.rank, suit=args.suit)
+    out = args.output_dir / _card_filename(args.rank, args.suit)
+    out.write_text(svg, encoding="utf-8")
+    print(f"Готово: {out.resolve()}")
+    return 0
 
 
 if __name__ == "__main__":
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-
-    svg = generate_card(rank=10, suit="spades")
-    out = OUTPUT_DIR / _card_filename(10, "spades")
-    out.write_text(svg, encoding="utf-8")
-    print(f"Готово: {out.resolve()}")
+    sys.exit(main())
