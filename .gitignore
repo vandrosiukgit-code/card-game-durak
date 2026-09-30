@@ -224,3 +224,4 @@ __marimo__/
 .aider.tags.cache.v*/
 .aider.llm.history
 .aider*
+!.aider.conf.yml
