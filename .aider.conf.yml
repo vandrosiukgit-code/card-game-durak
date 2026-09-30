@@ -5,6 +5,7 @@
 suggest-shell-commands: true
 shell-command-confirm: true
 auto-test: true
+auto-lint: true
 
 # Режим архитектора (обсуждение перед правками)
 architect: true
@@ -15,7 +16,14 @@ yes-always: true
 # Коммиты: не коммитить автоматически (см. CONVENTIONS.md §5)
 auto-commits: false
 
-# Линтер и тесты: aider не запускает их сам, только предлагает
+# Не подписывать коммиты как aider — автор и коммиттер = пользователь
+attribute-author: false
+attribute-committer: false
+
+# Не трогать файлы из .gitignore
+gitignore: true
+
+# Линтер и тесты: aider запускает их автоматически после правок
 lint-cmd: "ruff check --fix"
 test-cmd: "pytest"
 
