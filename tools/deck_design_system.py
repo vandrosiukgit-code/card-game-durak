@@ -6,9 +6,21 @@
 Область применения
 ------------------
 
-Скрипт генерирует SVG-карты **числовых рангов 2–10** во всех четырёх
-мастях. Фигурные карты (J, Q, K, A) в текущей версии **не поддерживаются**
-и будут добавлены отдельной задачей.
+Скрипт генерирует SVG-карты для всех 36 карт колоды.
+
+Числовые ранги (2–10) и туз (A) рисуются **пипсами** (символами масти).
+
+Фигурные карты (J, Q, K) используют растровые портреты из
+``assets/art/<RANK>_<suit>.png``, сгенерированные скриптом
+``scripts/generate_faces_workflow.py``. Перед встраиванием PNG
+обрезается по bounding box непрозрачных пикселей (``_trim_png_alpha``)
+— это убирает прозрачные поля, из-за которых персонаж казался
+смещённым относительно центра карты. В стиле русской колоды портрет
+рисуется **дважды**: верхний — нормальный, нижний — повёрнутый на
+180° вокруг центра карты. Портреты встраиваются в SVG как
+base64-encoded ``<image>`` — это делает SVG самодостаточным
+(не зависит от внешних файлов при рендере), но увеличивает размер
+файла примерно на 66% от размера PNG (два портрета).
 
 Раскладка пипсов (русская колода)
 ---------------------------------
@@ -57,6 +69,19 @@
 ⚠️ **Не менять эти параметры без пересчёта коллизий** — есть тест
 ``test_corner_index_does_not_overlap_pip_area``, который проверяет, что
 угловой индекс не пересекается с областью пипсов.
+
+Запуск
+------
+
+Модуль запускается **из корня проекта** (там, где лежит ``tools/``)::
+
+    cd /d/PythonProjects
+    python -m tools.deck_design_system J --suit spades
+
+⚠️ **Не запускать из папки ``tools/``** — тогда Python ищет
+``tools/tools/deck_design_system.py`` и падает с ``No module named tools``.
+Если очень нужно из ``tools/`` — используй ``python -m deck_design_system``
+(без префикса ``tools.``).
 """
 
 from __future__ import annotations
@@ -71,6 +96,10 @@ from pathlib import Path
 # ---------------------------------------------------------------------------
 
 OUTPUT_DIR = Path(__file__).resolve().parent.parent / "assets" / "card_deck" / "cards"
+
+# Каталог с растровыми портретами фигурных карт (J/Q/K × 4 масти).
+# Генерируется скриптом scripts/generate_faces_workflow.py.
+ART_DIR = Path(__file__).resolve().parent.parent / "assets" / "art"
 
 # ---------------------------------------------------------------------------
 # Параметры стиля
@@ -94,15 +123,15 @@ class CardStyle:
 
     # Шрифты
     font_family: str = "'Times New Roman', 'Georgia', serif"
-    corner_rank_size: int = 100
-    corner_suit_size: int = 55
+    corner_rank_size: int = 130
+    corner_suit_size: int = 72
     pip_size: int = 170
 
     # Отступы
-    corner_padding_x: int = 55
-    corner_padding_y: int = 45
-    pip_margin_x: int = 210
-    pip_margin_y: int = 220
+    corner_padding_x: int = 35
+    corner_padding_y: int = 30
+    pip_margin_x: int = 260
+    pip_margin_y: int = 250
 
     # Зеркальность пипсов в нижней половине карты
     mirror_pips: bool = True
@@ -245,6 +274,9 @@ SUIT_COLORS: dict[str, str] = {
 # Раскладка пипсов для рангов 2–10
 # ---------------------------------------------------------------------------
 
+# ⚠️ В «Подкидном Дураке» используются только ранги 6–10, J, Q, K, A.
+# Раскладки для 2–5 оставлены для совместимости с французской колодой
+# (52 карты) и не участвуют в генерации колоды Дурака.
 PIP_LAYOUTS: dict[int, list[tuple[float, float]]] = {
     1: [(0.5, 0.5)],
     2: [(0.5, 0.0), (0.5, 1.0)],
@@ -307,15 +339,14 @@ PIP_LAYOUTS: dict[int, list[tuple[float, float]]] = {
         (0.0, 1.0),
         (1.0, 1.0),
     ],
-    # Фигурные карты: упрощённые раскладки (без портретов).
-    11: [(0.5, 0.0), (0.5, 1.0)],  # J — как «2»
-    12: [(0.5, 0.0), (0.5, 0.5), (0.5, 1.0)],  # Q — как «3»
-    13: [(0.0, 0.0), (1.0, 0.0), (0.0, 1.0), (1.0, 1.0)],  # K — как «4»
     14: [(0.5, 0.5)],  # A — один крупный пипс в центре
 }
 
 # Ранги, у которых пипсы рисуются крупнее (туз — один большой символ).
 LARGE_PIP_RANKS: frozenset[int] = frozenset({14})
+
+# Фигурные карты: рисуются растровым портретом, а не пипсами.
+FACE_RANKS: frozenset[int] = frozenset({11, 12, 13})  # J, Q, K
 
 
 # ---------------------------------------------------------------------------
@@ -392,6 +423,205 @@ def _suit_symbol(
         f'<path d="{path}" fill="{color}"/>'
         f"</g>"
     )
+
+
+def _trim_png_alpha(png_bytes: bytes) -> bytes:
+    """Обрезает прозрачные поля PNG по bounding box непрозрачных пикселей.
+
+    Использует только stdlib (``struct`` + ``zlib``). Поддерживает
+    только 8-битные RGBA PNG без интерлейса — этого достаточно для
+    вывода ``bria/remove-background``. Если формат не поддержан —
+    возвращает исходные байты (безопасный fallback).
+
+    :param png_bytes: исходные байты PNG
+    :return: обрезанные байты PNG
+    """
+    import struct
+    import zlib
+
+    if not png_bytes.startswith(b"\x89PNG\r\n\x1a\n"):
+        return png_bytes
+
+    pos = 8
+    width = height = None
+    idat = bytearray()
+    while pos < len(png_bytes):
+        length = struct.unpack(">I", png_bytes[pos : pos + 4])[0]
+        chunk_type = png_bytes[pos + 4 : pos + 8]
+        chunk_data = png_bytes[pos + 8 : pos + 8 + length]
+        if chunk_type == b"IHDR":
+            width, height, bit_depth, color_type, _, _, interlace = struct.unpack(
+                ">IIBBBBB", chunk_data
+            )
+            if bit_depth != 8 or color_type != 6 or interlace != 0:
+                return png_bytes
+        elif chunk_type == b"IDAT":
+            idat.extend(chunk_data)
+        elif chunk_type == b"IEND":
+            break
+        pos += 12 + length
+
+    if width is None or height is None or not idat:
+        return png_bytes
+
+    try:
+        raw = zlib.decompress(bytes(idat))
+    except zlib.error:
+        # Битый IDAT (например, тестовый «минимальный» PNG) — не падаем,
+        # возвращаем исходные байты. Это безопасный fallback.
+        return png_bytes
+    stride = width * 4
+    pixels = bytearray(width * height * 4)
+    prev = bytearray(stride)
+    for y in range(height):
+        filter_type = raw[y * (stride + 1)]
+        line = bytearray(raw[y * (stride + 1) + 1 : (y + 1) * (stride + 1)])
+        if filter_type == 1:  # Sub
+            for i in range(4, stride):
+                line[i] = (line[i] + line[i - 4]) & 0xFF
+        elif filter_type == 2:  # Up
+            for i in range(stride):
+                line[i] = (line[i] + prev[i]) & 0xFF
+        elif filter_type == 3:  # Average
+            for i in range(stride):
+                left = line[i - 4] if i >= 4 else 0
+                line[i] = (line[i] + ((left + prev[i]) >> 1)) & 0xFF
+        elif filter_type == 4:  # Paeth
+            for i in range(stride):
+                a = line[i - 4] if i >= 4 else 0
+                b = prev[i]
+                c = prev[i - 4] if i >= 4 else 0
+                p = a + b - c
+                pa, pb, pc = abs(p - a), abs(p - b), abs(p - c)
+                if pa <= pb and pa <= pc:
+                    pred = a
+                elif pb <= pc:
+                    pred = b
+                else:
+                    pred = c
+                line[i] = (line[i] + pred) & 0xFF
+        pixels[y * stride : (y + 1) * stride] = line
+        prev = line
+
+    x_min, y_min, x_max, y_max = width, height, -1, -1
+    for y in range(height):
+        row = y * stride
+        for x in range(width):
+            if pixels[row + x * 4 + 3] > 0:
+                if x < x_min:
+                    x_min = x
+                if x > x_max:
+                    x_max = x
+                if y < y_min:
+                    y_min = y
+                if y > y_max:
+                    y_max = y
+
+    if x_max < 0:
+        return png_bytes
+
+    new_w = x_max - x_min + 1
+    new_h = y_max - y_min + 1
+    if new_w == width and new_h == height:
+        return png_bytes
+
+    cropped = bytearray()
+    for y in range(y_min, y_max + 1):
+        row = y * stride
+        cropped.extend(b"\x00")
+        cropped.extend(pixels[row + x_min * 4 : row + (x_max + 1) * 4])
+
+    def _chunk(chunk_type: bytes, data: bytes) -> bytes:
+        return (
+            struct.pack(">I", len(data))
+            + chunk_type
+            + data
+            + struct.pack(">I", zlib.crc32(chunk_type + data) & 0xFFFFFFFF)
+        )
+
+    ihdr = struct.pack(">IIBBBBB", new_w, new_h, 8, 6, 0, 0, 0)
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + _chunk(b"IHDR", ihdr)
+        + _chunk(b"IDAT", zlib.compress(bytes(cropped), 9))
+        + _chunk(b"IEND", b"")
+    )
+
+
+def _face_portrait_image(
+    rank: int,
+    suit: str,
+    style: CardStyle,
+    *,
+    flip: bool = False,
+) -> str:
+    """Возвращает SVG-элемент с PNG-портретом фигурной карты.
+
+    Портрет берётся из ``assets/art/<RANK>_<suit>.png`` и встраивается
+    как base64-encoded ``<image>``. Это делает SVG самодостаточным
+    (не зависит от внешних файлов при рендере).
+
+    :param rank: числовой ранг (11=J, 12=Q, 13=K)
+    :param suit: масть
+    :param style: параметры стиля
+    :param flip: если ``True`` — портрет повёрнут на 180° вокруг центра
+        карты (нижняя половина в стиле русской колоды)
+    :return: строка с SVG-элементом ``<image>``
+    :raises FileNotFoundError: если PNG-портрет не найден
+    """
+    import base64
+
+    rank_label = RANK_LABELS[rank]
+    png_path = ART_DIR / f"{rank_label}_{suit}.png"
+    if not png_path.exists():
+        raise FileNotFoundError(
+            f"Портрет не найден: {png_path}. "
+            f"Сгенерируй его через scripts/generate_faces_workflow.py."
+        )
+
+    png_bytes = _trim_png_alpha(png_path.read_bytes())
+    data = base64.b64encode(png_bytes).decode("ascii")
+
+    # Портрет занимает верхнюю половину карты с отступом под угловой
+    # индекс. Коэффициенты подобраны так, чтобы портрет был крупным
+    # (~20% больше прежнего), но не залезал на угловой индекс.
+    portrait_margin_x = style.corner_padding_x + style.corner_rank_size * 0.3
+    portrait_margin_y = style.corner_padding_y + style.corner_rank_size * 0.5
+    area_x = portrait_margin_x
+    area_y = portrait_margin_y
+    area_w = style.width - 2 * area_x
+    area_h = (style.height - 2 * area_y) / 2
+
+    image = (
+        f'<image x="{area_x}" y="{area_y}" '
+        f'width="{area_w}" height="{area_h}" '
+        f'preserveAspectRatio="xMidYMid meet" '
+        f'href="data:image/png;base64,{data}"/>'
+    )
+
+    if not flip:
+        return image
+
+    cx, cy = style.width / 2, style.height / 2
+    return f'<g transform="rotate(180 {cx} {cy})">{image}</g>'
+
+
+def _face_portraits(rank: int, suit: str, style: CardStyle) -> list[str]:
+    """Возвращает пару портретов фигурной карты: верхний и нижний (зеркало).
+
+    В стиле русской колоды фигурная карта содержит два одинаковых
+    портрета: верхний — нормальный, нижний — повёрнутый на 180° вокруг
+    центра карты. Это делает карту читаемой с любой стороны.
+
+    :param rank: числовой ранг (11=J, 12=Q, 13=K)
+    :param suit: масть
+    :param style: параметры стиля
+    :return: список из двух SVG-элементов ``<image>``
+    """
+    return [
+        _face_portrait_image(rank, suit, style, flip=False),
+        _face_portrait_image(rank, suit, style, flip=True),
+    ]
 
 
 def get_base_frame(style: CardStyle) -> str:
@@ -494,13 +724,17 @@ def generate_card(rank: int, suit: str, style: CardStyle | None = None) -> str:
     pip_size = style.pip_size * 2 if rank in LARGE_PIP_RANKS else style.pip_size
 
     pips: list[str] = []
-    for fx, fy in get_pip_layout(rank, suit):
-        px = area_x + fx * area_w
-        py = area_y + fy * area_h
-        symbol = _suit_symbol(suit, px, py, pip_size, color)
-        if style.mirror_pips and fy > 0.5:
-            symbol = f'<g transform="rotate(180 {px:.2f} {py:.2f})">{symbol}</g>'
-        pips.append(symbol)
+    if rank in FACE_RANKS:
+        # Фигурные карты: два портрета (верхний + нижний зеркальный).
+        pips.extend(_face_portraits(rank, suit, style))
+    else:
+        for fx, fy in get_pip_layout(rank, suit):
+            px = area_x + fx * area_w
+            py = area_y + fy * area_h
+            symbol = _suit_symbol(suit, px, py, pip_size, color)
+            if style.mirror_pips and fy > 0.5:
+                symbol = f'<g transform="rotate(180 {px:.2f} {py:.2f})">{symbol}</g>'
+            pips.append(symbol)
 
     parts = [
         f'<svg xmlns="http://www.w3.org/2000/svg" '
@@ -524,6 +758,93 @@ def _card_filename(rank: int, suit: str) -> str:
     ``A_of_diamonds.svg``.
     """
     return f"{RANK_LABELS[rank]}_of_{suit}.svg"
+
+
+# ---------------------------------------------------------------------------
+# HTML-превью
+# ---------------------------------------------------------------------------
+
+_PREVIEW_TEMPLATE = """<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Deck preview — 36 cards</title>
+<style>
+  body {{
+    margin: 0;
+    padding: 24px;
+    background: #0e0e0e;
+    color: #e0e0e0;
+    font-family: system-ui, sans-serif;
+  }}
+  h1 {{ font-size: 18px; font-weight: 500; margin: 0 0 16px; }}
+  .grid {{
+    display: grid;
+    grid-template-columns: repeat(9, 1fr);
+    gap: 12px;
+    max-width: 1600px;
+  }}
+  .cell {{
+    background: #1a1a1a;
+    border-radius: 8px;
+    overflow: hidden;
+    aspect-ratio: 825 / 1125;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }}
+  .cell img {{ width: 100%; height: 100%; object-fit: contain; display: block; }}
+  .cell.missing {{ background: #2a1010; }}
+  .cell.missing::after {{
+    content: "missing";
+    color: #a04040;
+    font-size: 12px;
+  }}
+</style>
+</head>
+<body>
+<h1>Deck preview — {count} / 36 карт</h1>
+<div class="grid">
+{rows}
+</div>
+</body>
+</html>
+"""
+
+
+def build_preview_html(output_dir: Path) -> str:
+    """Собирает HTML-превью всех 36 карт колоды в виде сетки 9×4.
+
+    Порядок: строки — масти (spades, hearts, clubs, diamonds),
+    столбцы — ранги (6..10, J, Q, K, A). Отсутствующие файлы
+    помечаются классом ``missing``.
+
+    :param output_dir: каталог с SVG-файлами карт
+    :return: строка HTML
+    """
+    # Порядок рангов в колоде: 6..10, J, Q, K, A.
+    rank_order = [6, 7, 8, 9, 10, 11, 12, 13, 14]
+    suit_order = ["spades", "hearts", "clubs", "diamonds"]
+
+    rows: list[str] = []
+    count = 0
+    for suit in suit_order:
+        cells: list[str] = []
+        for rank in rank_order:
+            filename = _card_filename(rank, suit)
+            if (output_dir / filename).exists():
+                cells.append(
+                    f'  <div class="cell"><img src="{filename}" alt="{filename}"></div>'
+                )
+                count += 1
+            else:
+                cells.append('  <div class="cell missing"></div>')
+        rows.append("\n".join(cells))
+    return _PREVIEW_TEMPLATE.format(
+        count=count,
+        rows="\n".join(rows),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -699,7 +1020,10 @@ def main(argv: list[str] | None = None) -> int:
                 out = args.output_dir / _card_filename(rank, suit)
                 out.write_text(svg, encoding="utf-8")
                 count += 1
+        preview_path = args.output_dir / "preview.html"
+        preview_path.write_text(build_preview_html(args.output_dir), encoding="utf-8")
         print(f"Готово: {count} карт(ы) в {args.output_dir.resolve()}")
+        print(f"[html] {preview_path.resolve()}")
         return 0
 
     # Одиночный режим: нужны rank и --suit.

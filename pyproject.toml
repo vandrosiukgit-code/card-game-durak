@@ -2,6 +2,8 @@
 # Длина строки по стандарту
 line-length = 88
 target-version = "py311"
+# requirements.txt — не Python-файл, ruff не должен его парсить
+extend-exclude = ["requirements.txt"]
 
 [tool.ruff.lint]
 # E/W - ошибки/предупреждения PEP8, F - Pyflakes, I - isort (сортировка импортов), B - bugbear (поиск багов)

@@ -22,7 +22,7 @@ A networked **"Podkidnoy Durak"** card game, played in a web browser.
 ## 2. Non-goals (explicitly out of scope)
 
 - No mobile-native apps (iOS/Android). Browser only.
-- No 3D graphics. Realistic PNG textures, not Three.js.
+- No 3D graphics. SVG vector graphics, not Three.js.
 - No user-uploaded assets. Only curated asset packs.
 - No email, no financial data, no sensitive personal data.
 - No social features (friends, chat, profiles beyond nickname + stats).
@@ -82,9 +82,9 @@ basic mechanics (deal, show hand, play a card without validation).
 ## 7. Visual style & assets
 
 - **Phase 1:** SVG minimalism. Fast to iterate, no asset pipeline.
-- **Phase 2:** realistic PNG textures. Migration must be painless —
-  therefore an **asset abstraction layer** is required from day one.
-  Code must not know whether it renders SVG or PNG.
+- **Phase 2:** detailed SVG artwork (realistic style). Migration must be
+  painless — therefore an **asset abstraction layer** is required from
+  day one. Code must not know whether it renders minimal or detailed SVG.
 - **Animations:** deal, card flight to table, flip, take, win/lose screen.
 - **No 3D.**
 
